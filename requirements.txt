@@ -1,6 +1,6 @@
-streamlit
-rembg
+streamlit==1.28.0
 opencv-python-headless
-numpy
+numpy<2.0.0
 Pillow
 streamlit-drawable-canvas
+watchdog
