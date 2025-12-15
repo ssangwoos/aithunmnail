@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>HTML5 스캐너 (설치 필요 없음)</title>
+    <style>
+        body { font-family: sans-serif; background: #f0f2f6; text-align: center; padding: 20px; }
+        h1 { color: #333; }
+        .container { display: flex; flex-direction: column; align-items: center; gap: 20px; }
+        canvas { border: 2px solid #ddd; background: white; cursor: crosshair; max-width: 100%; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .controls { margin: 10px 0; }
+        button { padding: 10px 20px; font-size: 16px; cursor: pointer; background: #ff4b4b; color: white; border: none; border-radius: 5px; }
+        button:hover { background: #ff2b2b; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        input[type="file"] { padding: 10px; }
+        .status { color: #666; font-weight: bold; margin-bottom: 10px; }
+    </style>
+</head>
+<body>
+
+    <h1>📱 초간단 웹 스캐너 (HTML5)</h1>
+    <p>파이썬, 서버, 설치 다 필요 없습니다. 그냥 쓰세요.</p>
+
+    <div class="container">
+        <input type="file" id="uploadInput" accept="image/*">
+        <div class="status" id="statusMsg">사진을 올리고 모서리 4개를 찍으세요 (좌상→우상→우하→좌하 순서)</div>
+        
+        <canvas id="srcCanvas"></canvas>
+        
+        <div class="controls">
+            <button id="resetBtn">🔄 다시 찍기</button>
+            <button id="downloadBtn" style="display:none; background-color: #00cc00;">💾 결과 다운로드</button>
+        </div>
+
+        <canvas id="dstCanvas" style="display:none;"></canvas>
+    </div>
+
+<script>
+    const uploadInput = document.getElementById('uploadInput');
+    const srcCanvas = document.getElementById('srcCanvas');
+    const dstCanvas = document.getElementById('dstCanvas');
+    const ctx = srcCanvas.getContext('2d');
+    const statusMsg = document.getElementById('statusMsg');
+    const resetBtn = document.getElementById('resetBtn');
+    const downloadBtn = document.getElementById('downloadBtn');
+
+    let img = new Image();
+    let points = []; // 찍은 점들 저장
+
+    // 1. 이미지 업로드
+    uploadInput.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if(!file) return;
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            img.onload = () => {
+                // 캔버스 크기 설정 (화면에 맞게 줄이기)
+                const maxWidth = 800;
+                const scale = Math.min(1, maxWidth / img.width);
+                srcCanvas.width = img.width * scale;
+                srcCanvas.height = img.height * scale;
+                
+                // 이미지 그리기
+                ctx.drawImage(img, 0, 0, srcCanvas.width, srcCanvas.height);
+                points = []; // 점 초기화
+                statusMsg.innerText = "모서리 4개를 순서대로 클릭하세요 (왼쪽위 → 오른쪽위 → 오른쪽아래 → 왼쪽아래)";
+                downloadBtn.style.display = 'none';
+            }
+            img.src = event.target.result;
+        }
+        reader.readAsDataURL(file);
+    });
+
+    // 2. 점 찍기 (클릭 이벤트)
+    srcCanvas.addEventListener('mousedown', (e) => {
+        if(points.length >= 4) return;
+
+        const rect = srcCanvas.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+
+        points.push({x, y});
+
+        // 점 그리기 (시각화)
+        ctx.fillStyle = '#00FF00';
+        ctx.beginPath();
+        ctx.arc(x, y, 5, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 선 연결
+        if(points.length > 1) {
+            ctx.strokeStyle = '#00FF00';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(points[points.length-2].x, points[points.length-2].y);
+            ctx.lineTo(x, y);
+            ctx.stroke();
+        }
+
+        // 4개 다 찍었으면 변환 실행
+        if(points.length === 4) {
+            // 마지막 선 연결
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+            ctx.lineTo(points[0].x, points[0].y);
+            ctx.stroke();
+            
+            statusMsg.innerText = "변환 중...";
+            setTimeout(processImage, 100); // UI 렌더링을 위해 살짝 대기
+        }
+    });
+
+    // 3. 다시 찍기 버튼
+    resetBtn.addEventListener('click', () => {
+        if(img.src) {
+            ctx.drawImage(img, 0, 0, srcCanvas.width, srcCanvas.height);
+            points = [];
+            statusMsg.innerText = "다시 찍어주세요.";
+            downloadBtn.style.display = 'none';
+            dstCanvas.style.display = 'none';
+        }
+    });
+
+    // 4. 다운로드 버튼
+    downloadBtn.addEventListener('click', () => {
+        const link = document.createElement('a');
+        link.download = 'scan_result.png';
+        link.href = dstCanvas.toDataURL();
+        link.click();
+    });
+
+    // === 핵심: 투시 변환 로직 (수학 계산) ===
+    function processImage() {
+        // 원본 좌표
+        const srcPoints = points.map(p => p.x * (img.width / srcCanvas.width)); // 원본 해상도로 좌표 복원
+        const srcFlat = [
+            srcPoints[0].x, srcPoints[0].y,
+            srcPoints[1].x, srcPoints[1].y,
+            srcPoints[2].x, srcPoints[2].y,
+            srcPoints[3].x, srcPoints[3].y
+        ];
+
+        // 목표 너비/높이 계산
+        const w1 = Math.hypot(srcPoints[1].x - srcPoints[0].x, srcPoints[1].y - srcPoints[0].y);
+        const w2 = Math.hypot(srcPoints[2].x - srcPoints[3].x, srcPoints[2].y - srcPoints[3].y);
+        const h1 = Math.hypot(srcPoints[3].x - srcPoints[0].x, srcPoints[3].y - srcPoints[0].y);
+        const h2 = Math.hypot(srcPoints[2].x - srcPoints[1].x, srcPoints[2].y - srcPoints[1].y);
+        
+        const dstWidth = Math.max(w1, w2);
+        const dstHeight = Math.max(h1, h2);
+
+        // 결과 캔버스 크기 설정
+        dstCanvas.width = dstWidth;
+        dstCanvas.height = dstHeight;
+        const dstCtx = dstCanvas.getContext('2d');
+        const dstImgData = dstCtx.createImageData(dstWidth, dstHeight);
+
+        // 호모그래피 행렬 계산 (OpenCV 없이 순수 수학으로 구현)
+        const h = solveHomography(srcFlat, [0, 0, dstWidth, 0, dstWidth, dstHeight, 0, dstHeight]);
+
+        // 픽셀 매핑 (Inverse Mapping)
+        const srcData = (function() {
+            // 원본 데이터 가져오기 (메모리 효율을 위해 임시 캔버스 사용)
+            const tmpCanvas = document.createElement('canvas');
+            tmpCanvas.width = img.width;
+            tmpCanvas.height = img.height;
+            const tmpCtx = tmpCanvas.getContext('2d');
+            tmpCtx.drawImage(img, 0, 0);
+            return tmpCtx.getImageData(0, 0, img.width, img.height);
+        })();
+
+        // 모든 픽셀을 돌면서 변환 (여기가 핵심)
+        const data = dstImgData.data;
+        const sData = srcData.data;
+        const sw = srcData.width;
+        const sh = srcData.height;
+
+        for(let y = 0; y < dstHeight; y++) {
+            for(let x = 0; x < dstWidth; x++) {
+                // 역변환 행렬 적용
+                const den = h[6]*x + h[7]*y + 1;
+                const u = (h[0]*x + h[1]*y + h[2]) / den;
+                const v = (h[3]*x + h[4]*y + h[5]) / den;
+
+                // 범위 체크
+                if(u >= 0 && u < sw-1 && v >= 0 && v < sh-1) {
+                    const idx = (y * dstWidth + x) * 4;
+                    const su = Math.floor(u);
+                    const sv = Math.floor(v);
+                    const sIdx = (sv * sw + su) * 4;
+
+                    // 단순 복사 (Nearest Neighbor) - 속도 빠름
+                    data[idx] = sData[sIdx];     // R
+                    data[idx+1] = sData[sIdx+1]; // G
+                    data[idx+2] = sData[sIdx+2]; // B
+                    data[idx+3] = 255;           // A
+                }
+            }
+        }
+
+        dstCtx.putImageData(dstImgData, 0, 0);
+        
+        // 결과 보여주기
+        dstCanvas.style.display = 'block';
+        dstCanvas.style.maxWidth = '100%';
+        statusMsg.innerText = "완료! 아래 초록색 버튼을 눌러 저장하세요.";
+        downloadBtn.style.display = 'inline-block';
+        
+        // 스크롤 내려주기
+        dstCanvas.scrollIntoView({behavior: "smooth"});
+    }
+
+    // 8개의 점으로 호모그래피 행렬(3x3)을 구하는 함수 (가우스 소거법)
+    function solveHomography(src, dst) {
+        let a = [];
+        for(let i=0; i<4; i++) {
+            let sx = src[i*2], sy = src[i*2+1];
+            let dx = dst[i*2], dy = dst[i*2+1];
+            a.push([sx, sy, 1, 0, 0, 0, -dx*sx, -dx*sy, dx]);
+            a.push([0, 0, 0, sx, sy, 1, -dy*sx, -dy*sy, dy]);
+        }
+        
+        // 가우스 소거법으로 해 구하기
+        const n = 8;
+        for(let i=0; i<n; i++) {
+            let maxEl = Math.abs(a[i][i]);
+            let maxRow = i;
+            for(let k=i+1; k<n; k++) {
+                if(Math.abs(a[k][i]) > maxEl) {
+                    maxEl = Math.abs(a[k][i]);
+                    maxRow = k;
+                }
+            }
+            for(let k=i; k<n+1; k++) {
+                let tmp = a[maxRow][k];
+                a[maxRow][k] = a[i][k];
+                a[i][k] = tmp;
+            }
+            for(let k=i+1; k<n; k++) {
+                let c = -a[k][i] / a[i][i];
+                for(let j=i; j<n+1; j++) {
+                    if(i===j) a[k][j] = 0;
+                    else a[k][j] += c * a[i][j];
+                }
+            }
+        }
+        let x = new Array(n).fill(0);
+        for(let i=n-1; i>=0; i--) {
+            x[i] = a[i][n] / a[i][i];
+            for(let k=i-1; k>=0; k--) a[k][n] -= a[k][i] * x[i];
+        }
+        return [...x, 1];
+    }
+</script>
+</body>
+</html>
